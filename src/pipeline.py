@@ -30,11 +30,18 @@ def session_bounds(date: str, start_h: int, end_h: int):
 
 
 class PricePath:
-    """Preis-Pfad aus Trades: price_at(t) = letzter Trade-Preis <= t (kein Look-ahead)."""
-    def __init__(self, trades: pd.DataFrame):
-        tr = trades.sort_values("event_time", kind="stable")
-        self.t = book.to_ns(tr["event_time"])
-        self.p = tr["price"].to_numpy(dtype="float64")
+    """
+    Preis-Pfad: price_at(t) = letzter Wert <= t (kein Look-ahead).
+
+    Standardmaessig auf dem MID-Preis aus dem rekonstruierten Orderbuch
+    (price_col='mid'): der ist gegen fehlerhafte Trade-Prints (Ausreisser)
+    robust. Fuer die Move-Messung ist das die saubere Quelle.
+    """
+    def __init__(self, df: pd.DataFrame, price_col: str = "price"):
+        d = df.sort_values("event_time", kind="stable")
+        d = d[d[price_col].notna() & (d[price_col] > 0)]
+        self.t = book.to_ns(d["event_time"])
+        self.p = d[price_col].to_numpy(dtype="float64")
 
     def at(self, t_ns) -> float:
         if len(self.t) == 0:

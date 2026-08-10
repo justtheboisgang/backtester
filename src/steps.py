@@ -111,8 +111,17 @@ def step05_measure(force: bool = False):
     ev = io.load_parquet(P_EV)
     ref = io.load_parquet(P_REF)
 
+    # Move auf dem MID-Preis messen (robust gegen fehlerhafte Trade-Prints).
+    if P_TOB.exists():
+        tob = io.load_parquet(P_TOB)
+        pp = P.PricePath(tob, price_col="mid")
+        print("  Preis-Pfad: MID aus Top-of-Book (Schritt 4).")
+    else:
+        pp = P.PricePath(tr, price_col="price")
+        print("  WARNUNG: keine Top-of-Book-Datei -> Fallback auf Trade-Preis "
+              "(bitte zuerst Schritt 4 laufen lassen).")
+
     obd = book.level_deltas(ob)
-    pp = P.PricePath(tr)
     meas = P.Measurer(obd, tr, pp)
 
     ev_meas = P.measure_events(ev, meas)
@@ -130,6 +139,13 @@ def step05_measure(force: bool = False):
             n_dec = df["n_dec"].sum(); n_amb = df["n_amb"].sum()
             pct = (100.0 * n_amb / n_dec) if n_dec else 0.0
             print(f"  {nm}: Mengenreduktionen={int(n_dec)}, davon unklar (ambiguous)={int(n_amb)} = {pct:.1f}%")
+
+    # Plausibilitaets-Diagnose der Moves (deckt Ausreisser auf).
+    if len(ev_meas):
+        m = ev_meas["abs_move_bps"].dropna()
+        if len(m):
+            print(f"  |Move|-Verteilung Events (bps): median={m.median():.1f}, "
+                  f"p95={m.quantile(0.95):.1f}, max={m.max():.1f}")
     return ev_meas, ct_meas
 
 

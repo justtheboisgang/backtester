@@ -122,7 +122,10 @@ dem Level sein** (0 = Level gelöscht); nur dann stimmt die Pull/Stack-Logik.
    weggelassen (bei mehreren Tagen nutzt Asien die US-Session des Vortags).
 3. **Event-Definition & mehrere Fenster** — `pipeline.detect_events` +
    `Measurer`. Event = Preis erreicht ein Referenzlevel. Vor-Fenster
-   `5/15/30 s`, Nach-Fenster `30/60/300 s` (in `config.py`).
+   `5/15/30 s`, Nach-Fenster `30/60/300 s` (in `config.py`). Die
+   Preisbewegung wird auf dem **Mid-Preis** aus dem rekonstruierten Orderbuch
+   gemessen (Schritt 4) — robust gegen fehlerhafte Trade-Prints (Ausreißer),
+   die den Move-Mittelwert sonst verzerren.
 4. **Kontrollgruppe (Pflicht)** — `pipeline.build_controls`. Dieselbe Messung an
    zufälligen Zeitpunkten **ohne** Levelbezug (mind. `0,25` USDT von jedem Level
    entfernt).
