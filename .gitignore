@@ -1,0 +1,18 @@
+# --- Daten & Secrets: NIE committen ---
+# Alle Parquet-Zwischenstände bleiben lokal (können groß sein).
+*.parquet
+*.parquet.zst
+# Ganzer Daten-Ordner (roh, interim, output) bleibt lokal.
+data/
+# API-Key niemals ins Repo.
+.env
+
+# --- Python-Kram ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env.local
+.ipynb_checkpoints/
+.pytest_cache/
+.DS_Store
