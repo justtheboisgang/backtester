@@ -38,6 +38,16 @@ from . import config as C
 EPS = 1e-12
 N_SEC = 24 * 3600
 
+# Harte, sachlich begruendete Grenzen fuer die Quotienten-Merkmale.
+# Ohne sie entstehen aus winzigen Restmengen im Nenner Werte um 1e12 und groesser.
+# Winsorisieren allein reicht dagegen NICHT: liegt mehr als ein halbes Prozent der
+# Werte im Extrem, ist schon das 99.5-Perzentil astronomisch. Und ein einzelner
+# Wert von 1e200 laesst bereits die Standardabweichung ueberlaufen.
+DEPTH_FLOOR = 1e-6        # darunter gilt die Tiefe als nicht auswertbar
+DEPTH_RATIO_CLIP = 100.0  # Tiefenaenderung um mehr als Faktor 100 in <=30 s ist ein Artefakt
+CHURN_CLIP = 1000.0       # Umschichtung > 1000x der Tiefe ist ein Artefakt
+NETOUT_NORM_CLIP = 1000.0
+
 # Merkmalsgruppen der Treppe (je Fenster w eingesetzt).
 STAGE1 = ["log_rv_pre"]
 STAGE2 = STAGE1 + ["log_vol", "log_ntrades"]
@@ -91,25 +101,29 @@ def build_vola_sample(st: pd.DataFrame, date: str) -> pd.DataFrame:
     out["depth"] = depth_all[t0]
     out["spread_bps"] = spread[t0] / np.maximum(mid[t0], EPS) * 1e4
 
-    # Quotienten nur bilden, wo die Tiefe echt positiv ist. Wuerde man hier mit
-    # einem Mini-Epsilon dividieren, entstuenden Werte um 1e15 - endlich, also von
-    # nan_to_num nicht abgefangen, aber gross genug, um jede Regression zu sprengen.
-    valid_depth = depth_all > 0.0
+    # Quotienten nur bilden, wo die Tiefe ueber dem Boden liegt, und das Ergebnis
+    # hart begrenzen (siehe Kommentar bei den Konstanten oben).
+    valid_depth = depth_all > DEPTH_FLOOR
 
     for w in C.PRE_WINDOWS_S:
         sb, sa = wsum("stack_bid", w), wsum("stack_ask", w)
         pb, pa = wsum("pull_bid", w), wsum("pull_ask", w)
         d_end, d_start = depth_all[t0], depth_all[t0 - w + 1]
         ok = valid_depth[t0] & valid_depth[t0 - w + 1]
+        safe_end = np.where(ok, d_end, 1.0)
+        safe_start = np.where(ok, d_start, 1.0)
         out[f"rv_pre_{w}"] = rv(t0 - w + 1, t0)
         out[f"netout_{w}"] = (pb + pa) - (sb + sa)
-        out[f"depth_ratio_{w}"] = np.where(ok, d_end / np.where(ok, d_start, 1.0), np.nan)
-        out[f"churn_{w}"] = np.where(ok, (pb + pa + sb + sa) / np.where(ok, d_end, 1.0), np.nan)
+        out[f"depth_ratio_{w}"] = np.where(
+            ok, np.clip(d_end / safe_start, 1.0 / DEPTH_RATIO_CLIP, DEPTH_RATIO_CLIP), np.nan)
+        out[f"churn_{w}"] = np.where(
+            ok, np.clip((pb + pa + sb + sa) / safe_end, 0.0, CHURN_CLIP), np.nan)
         out[f"vol_{w}"] = wsum("trade_vol", w)
         out[f"ntrades_{w}"] = wsum("n_trades", w)
         # Netto-Abfluss relativ zur Tiefe (skalenfrei, fuer die Regression).
-        out[f"netout_norm_{w}"] = np.where(ok, out[f"netout_{w}"] / np.where(ok, d_end, 1.0),
-                                           np.nan)
+        out[f"netout_norm_{w}"] = np.where(
+            ok, np.clip((out[f"netout_{w}"]) / safe_end,
+                        -NETOUT_NORM_CLIP, NETOUT_NORM_CLIP), np.nan)
 
     # Ziele NACH t0: Sekunden [t0+1, t0+h].
     mid_s = pd.Series(mid)
@@ -173,12 +187,21 @@ def _fit_predict(Xtr, ytr, Xte):
     Xtr = np.clip(Xtr, lo, hi)
     Xte = np.clip(Xte, lo, hi)
 
-    mu, sd = Xtr.mean(axis=0), Xtr.std(axis=0)
-    sd = np.where(sd < 1e-8, 1.0, sd)
-    Ztr = np.column_stack([np.ones(len(Xtr)), (Xtr - mu) / sd])
-    Zte = np.column_stack([np.ones(len(Xte)), (Xte - mu) / sd])
+    # Robuste Skalierung ueber Median und Interquartilsabstand: Mittelwert und
+    # Standardabweichung koennen bei sehr grossen Werten selbst ueberlaufen
+    # (x^2 laeuft schon ab ~1e154 ueber), der Median nicht.
+    med = np.median(Xtr, axis=0)
+    q75, q25 = np.percentile(Xtr, 75, axis=0), np.percentile(Xtr, 25, axis=0)
+    scale = np.where((q75 - q25) < 1e-8, 1.0, q75 - q25)
+
+    def z(X):
+        Z = (X - med) / scale
+        Z = np.nan_to_num(Z, nan=0.0, posinf=0.0, neginf=0.0)
+        return np.column_stack([np.ones(len(Z)), Z])
+
+    Ztr, Zte = z(Xtr), z(Xte)
     beta, *_ = np.linalg.lstsq(Ztr, ytr, rcond=1e-10)
-    return Zte @ beta
+    return np.nan_to_num(Zte @ beta, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def ladder(samples: dict[str, pd.DataFrame]) -> pd.DataFrame:
