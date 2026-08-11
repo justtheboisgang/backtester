@@ -242,6 +242,69 @@ oder nur an einem Tag auftrat). CSVs in `data/output/`:
 
 ---
 
+# Dritte Studie: Volatilitäts-Vorhersage
+
+**Forschungsfrage:** Sagt der Orderbuch-Zustand die realisierte Volatilität der
+nächsten 30/60/120 s vorher — **über das hinaus**, was vergangene Volatilität
+allein schon vorhersagt?
+
+```bash
+python run_vola_study.py --days 5
+python run_vola_study.py --days 3 --synth    # offline testen
+```
+
+## Sekundentabelle wird persistiert
+
+Ab jetzt speichert die Pipeline die verdichtete **Sekundentabelle** je Tag
+(`data/interim/dom_seconds/`, ~10 MB statt 3 GB). Jede weitere Studie läuft
+damit **ohne erneuten Download**. Der erste Lauf dieser Studie muss die Tage
+einmalig neu holen, danach nicht mehr.
+
+## Zielgrößen (beide ausgewiesen)
+
+| Größe | Definition |
+|---|---|
+| `rv_<h>` | Standardabweichung der Sekunden-Returns über den Horizont (bps) |
+| `range_<h>` | High-Low-Spanne des Mid über den Horizont, relativ zu `mid[t0]` (bps) |
+
+## Merkmale vor t0 (Fenster 5/15/30 s)
+
+`rv_pre` (vergangene Vola), `netout` = `(pull_bid+pull_ask) − (stack_bid+stack_ask)`,
+`depth_ratio` (Tiefe Fensterende / Fensteranfang), `depth` (absolut), `spread_bps`,
+`churn` = `(pull+stack)/Tiefe`, `vol` (gehandeltes Volumen), `ntrades` (Trade-Anzahl).
+
+## Die Treppe — out-of-sample bewertet
+
+| Stufe | Merkmale |
+|---|---|
+| **S1** | nur vergangene Volatilität |
+| **S2** | S1 + gehandeltes Volumen + Trade-Anzahl |
+| **S3** | S2 + Orderbuch (Netto-Abfluss, Tiefenveränderung, Umschichtung, Tiefe, Spread) |
+
+**Wichtig:** In-sample steigt R² *immer*, wenn man Merkmale hinzufügt — S3 > S2
+wäre dort garantiert und damit wertlos. Deshalb wird mit
+**Leave-one-day-out-Kreuzvalidierung** bewertet: trainieren auf 4 Tagen, testen
+auf dem ausgelassenen 5. Nur eine Verbesserung *dort* belegt eigene Information.
+Ausgewiesen werden `r2_oos`, `mae_bps` und die Differenz zur **vorigen** Stufe.
+
+## Überlappung und Fallzahl
+
+Bei Sekundenraster und 120 s Horizont teilen sich 120 aufeinanderfolgende Punkte
+fast denselben Move. Alle Auswertungen laufen auf **nicht-überlappenden Blöcken**
+(Schrittweite = Horizont); ausgewiesen wird die **effektive** Fallzahl, nicht die
+Rohzahl (Faktor 30/60/120).
+
+## Terzile nach Netto-Abfluss
+
+Terzilgrenzen werden **innerhalb jedes Tages** bestimmt — gepoolte Grenzen würden
+vor allem Wochentage von Wochenenden trennen statt Marktzustände. `netout`
+positiv = mehr Liquidität abgezogen als aufgebaut.
+
+Ergebnisse in `data/output/`: `vola_targets.csv`, `vola_ladder.csv`,
+`vola_terciles_{pooled,per_day}.csv`.
+
+---
+
 ## Nächste Schritte (erst nach Sichtung eines echten Tages)
 
 - **Ein echter Tag zuerst.** `python run_all.py` mit deinem Key laufen lassen,

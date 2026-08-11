@@ -25,8 +25,8 @@ import pandas as pd
 
 from src import config as C
 from src import chd_io as io
+from src import days
 from src import dom
-from src import synth as synthmod
 
 SAMPLE_DIR = C.INTERIM_DIR / "dom_samples"
 OUT = C.OUTPUT_DIR
@@ -43,18 +43,13 @@ def process_day(date: str, synth: bool = False, force: bool = False) -> pd.DataF
         print(f"  [{date}] Cache gefunden -> lade Sample (kein Download).")
         return io.load_parquet(p)
 
-    print(f"\n  [{date}] lade Rohdaten ...")
-    if synth:
-        ob, tr = synthmod.make_synthetic(date=date, seed=abs(hash(date)) % 10000)
-    else:
-        ob = io.download_orderbook(date, date)
-        tr = io.download_trades(date, date)
-    ob_rows, tr_rows = len(ob), len(tr)
-    ob_mb = ob.memory_usage(deep=True).sum() / 1e6
-    print(f"  [{date}] Orderbuch: {ob_rows:,} Zeilen ({ob_mb:,.0f} MB) | Trades: {tr_rows:,} Zeilen")
+    print(f"\n  [{date}] verarbeite Tag ...")
+    ob, tr = days.load_raw(date, synth=synth)
     if ob.empty or tr.empty:
         print(f"  [{date}] WARNUNG: keine Daten -> Tag uebersprungen.")
         return pd.DataFrame()
+    ob_mb = ob.memory_usage(deep=True).sum() / 1e6
+    print(f"  [{date}] Orderbuch: {len(ob):,} Zeilen ({ob_mb:,.0f} MB) | Trades: {len(tr):,} Zeilen")
 
     st = dom.build_second_table(ob, tr, date)
     sample = dom.build_sample(st, tr, date)
@@ -62,6 +57,10 @@ def process_day(date: str, synth: bool = False, force: bool = False) -> pd.DataF
     # Anteil unklarer Mengenreduktionen ausweisen (Pull/Fill-Trennung).
     n_dec, n_amb = st["n_dec"].sum(), st["n_amb"].sum()
     amb_pct = (100.0 * n_amb / n_dec) if n_dec else 0.0
+
+    # Sekundentabelle persistieren -> spaetere Studien brauchen keinen Download.
+    days.SECONDS_DIR.mkdir(parents=True, exist_ok=True)
+    io.save_parquet(st, days.seconds_path(date))
 
     # ---- Rohdaten SOFORT verwerfen ----
     del ob, tr, st

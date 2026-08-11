@@ -86,6 +86,7 @@ def build_second_table(ob: pd.DataFrame, trades: pd.DataFrame, date: str) -> pd.
     tbuy = (trades["side"].to_numpy(dtype=object) == "buy")
     buy_vol = _bincount(tsec[tvalid & tbuy], tqty[tvalid & tbuy])
     sell_vol = _bincount(tsec[tvalid & ~tbuy], tqty[tvalid & ~tbuy])
+    n_trades = _bincount(tsec[tvalid], np.ones(int(tvalid.sum())))
 
     st = bsec.copy()
     st["stack_bid"] = stack_bid
@@ -95,6 +96,7 @@ def build_second_table(ob: pd.DataFrame, trades: pd.DataFrame, date: str) -> pd.
     st["buy_vol"] = buy_vol
     st["sell_vol"] = sell_vol
     st["trade_vol"] = buy_vol + sell_vol
+    st["n_trades"] = n_trades
     st["n_dec"] = n_dec
     st["n_amb"] = n_amb
     return st
