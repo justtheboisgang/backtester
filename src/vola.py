@@ -201,7 +201,21 @@ def _fit_predict(Xtr, ytr, Xte):
 
     Ztr, Zte = z(Xtr), z(Xte)
     beta, *_ = np.linalg.lstsq(Ztr, ytr, rcond=1e-10)
-    return np.nan_to_num(Zte @ beta, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Manche BLAS-Implementierungen (u. a. Apple Accelerate auf macOS) setzen bei
+    # matmul Fliesskomma-Flags auf ungenutzten SIMD-Lanes und loesen dadurch
+    # RuntimeWarnings aus, obwohl die Rechnung voellig harmlos ist. Deshalb hier
+    # die Flags stummschalten - aber NICHT blind: direkt danach wird geprueft,
+    # ob das Ergebnis tatsaechlich endlich ist. Echte Probleme fallen so weiter auf.
+    with np.errstate(all="ignore"):
+        pred = Zte @ beta
+    if not np.isfinite(pred).all():
+        n_bad = int((~np.isfinite(pred)).sum())
+        raise FloatingPointError(
+            f"Vorhersage enthaelt {n_bad} nicht-endliche Werte - "
+            f"das ist ein echtes numerisches Problem, keine Plattform-Warnung."
+        )
+    return pred
 
 
 def ladder(samples: dict[str, pd.DataFrame]) -> pd.DataFrame:
