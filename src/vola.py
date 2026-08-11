@@ -91,18 +91,25 @@ def build_vola_sample(st: pd.DataFrame, date: str) -> pd.DataFrame:
     out["depth"] = depth_all[t0]
     out["spread_bps"] = spread[t0] / np.maximum(mid[t0], EPS) * 1e4
 
+    # Quotienten nur bilden, wo die Tiefe echt positiv ist. Wuerde man hier mit
+    # einem Mini-Epsilon dividieren, entstuenden Werte um 1e15 - endlich, also von
+    # nan_to_num nicht abgefangen, aber gross genug, um jede Regression zu sprengen.
+    valid_depth = depth_all > 0.0
+
     for w in C.PRE_WINDOWS_S:
         sb, sa = wsum("stack_bid", w), wsum("stack_ask", w)
         pb, pa = wsum("pull_bid", w), wsum("pull_ask", w)
         d_end, d_start = depth_all[t0], depth_all[t0 - w + 1]
+        ok = valid_depth[t0] & valid_depth[t0 - w + 1]
         out[f"rv_pre_{w}"] = rv(t0 - w + 1, t0)
         out[f"netout_{w}"] = (pb + pa) - (sb + sa)
-        out[f"depth_ratio_{w}"] = d_end / np.maximum(d_start, EPS)
-        out[f"churn_{w}"] = (pb + pa + sb + sa) / np.maximum(d_end, EPS)
+        out[f"depth_ratio_{w}"] = np.where(ok, d_end / np.where(ok, d_start, 1.0), np.nan)
+        out[f"churn_{w}"] = np.where(ok, (pb + pa + sb + sa) / np.where(ok, d_end, 1.0), np.nan)
         out[f"vol_{w}"] = wsum("trade_vol", w)
         out[f"ntrades_{w}"] = wsum("n_trades", w)
         # Netto-Abfluss relativ zur Tiefe (skalenfrei, fuer die Regression).
-        out[f"netout_norm_{w}"] = out[f"netout_{w}"] / np.maximum(d_end, EPS)
+        out[f"netout_norm_{w}"] = np.where(ok, out[f"netout_{w}"] / np.where(ok, d_end, 1.0),
+                                           np.nan)
 
     # Ziele NACH t0: Sekunden [t0+1, t0+h].
     mid_s = pd.Series(mid)
@@ -116,6 +123,11 @@ def build_vola_sample(st: pd.DataFrame, date: str) -> pd.DataFrame:
     df = df[np.isfinite(df["mid_t0"]) & (df["mid_t0"] > 0)]
     for h in C.HORIZONS_S:
         df = df[np.isfinite(df[f"rv_{h}"]) & np.isfinite(df[f"range_{h}"])]
+    # Zeitpunkte ohne gueltige Tiefe verwerfen, statt sie mit Ersatzwerten
+    # weiterzuschleppen - sie wuerden die Regression dominieren.
+    feat_cols = [f"{p}_{w}" for w in C.PRE_WINDOWS_S
+                 for p in ("depth_ratio", "churn", "netout_norm")]
+    df = df[np.isfinite(df[feat_cols]).all(axis=1) & np.isfinite(df["depth"]) & (df["depth"] > 0)]
     return df.reset_index(drop=True)
 
 
@@ -149,12 +161,23 @@ def _design(df: pd.DataFrame, feats: list[str], w: int) -> np.ndarray:
 
 
 def _fit_predict(Xtr, ytr, Xte):
-    """OLS mit Standardisierung (Statistiken NUR aus dem Trainingsteil)."""
+    """
+    OLS mit Winsorisierung und Standardisierung.
+    Alle Statistiken (Kappungsgrenzen, Mittelwert, Streuung) stammen
+    AUSSCHLIESSLICH aus dem Trainingsteil - sonst waere es Look-ahead.
+    """
+    # Extremwerte kappen: einzelne Ausreisser wuerden die Koeffizienten sonst
+    # dominieren und die Vorhersage auf dem Testtag unbrauchbar machen.
+    lo = np.percentile(Xtr, 0.5, axis=0)
+    hi = np.percentile(Xtr, 99.5, axis=0)
+    Xtr = np.clip(Xtr, lo, hi)
+    Xte = np.clip(Xte, lo, hi)
+
     mu, sd = Xtr.mean(axis=0), Xtr.std(axis=0)
-    sd = np.where(sd < EPS, 1.0, sd)
+    sd = np.where(sd < 1e-8, 1.0, sd)
     Ztr = np.column_stack([np.ones(len(Xtr)), (Xtr - mu) / sd])
     Zte = np.column_stack([np.ones(len(Xte)), (Xte - mu) / sd])
-    beta, *_ = np.linalg.lstsq(Ztr, ytr, rcond=None)
+    beta, *_ = np.linalg.lstsq(Ztr, ytr, rcond=1e-10)
     return Zte @ beta
 
 
@@ -266,6 +289,35 @@ def terciles(samples: dict[str, pd.DataFrame], per_day: bool = False) -> pd.Data
                                  "rv_mittel": float(g[f"rv_{h}"].mean()) if len(g) else np.nan,
                                  "range_mittel": float(g[f"range_{h}"].mean()) if len(g) else np.nan,
                                  "netout_mittel": float(g[f"netout_{w}"].mean()) if len(g) else np.nan})
+    return pd.DataFrame(rows)
+
+
+def netout_diagnosis(samples: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """
+    Prueft, ob 'netout' ueberhaupt eigenstaendige Information traegt.
+
+    Hintergrund: netout = pull - stack zaehlt bei den Abgaengen NUR Stornos,
+    denn Ausfuehrungen wurden herausklassifiziert. Ueber ein Fenster gilt
+        Tiefenaenderung = stack - pull - fills.
+    Bleibt die Tiefe ungefaehr konstant, folgt stack - pull ~ fills, also
+        netout ~ -Handelsvolumen.
+    Ist die Korrelation zwischen netout und Volumen stark negativ, misst netout
+    im Kern nur das Handelsvolumen - und ist damit kein eigenstaendiges
+    Orderbuch-Signal.
+    """
+    rows = []
+    pooled = pd.concat(samples.values(), ignore_index=True)
+    for w in C.PRE_WINDOWS_S:
+        x = pooled[f"netout_{w}"].to_numpy(dtype="float64")
+        v = pooled[f"vol_{w}"].to_numpy(dtype="float64")
+        ok = np.isfinite(x) & np.isfinite(v)
+        corr = float(np.corrcoef(x[ok], v[ok])[0, 1]) if ok.sum() > 2 else np.nan
+        # Anteil der Zeitpunkte mit netout < 0 (mehr Aufbau als Storno).
+        rows.append({"pre_s": w, "n": int(ok.sum()),
+                     "corr_netout_volumen": corr,
+                     "anteil_netout_negativ": float((x[ok] < 0).mean()),
+                     "netout_median": float(np.median(x[ok])),
+                     "volumen_median": float(np.median(v[ok]))})
     return pd.DataFrame(rows)
 
 

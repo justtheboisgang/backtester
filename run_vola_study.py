@@ -142,6 +142,17 @@ def main():
 
     ter_day = vola.terciles(samples, per_day=True)
 
+    print("\n  Traegt netout eigenstaendige Information? (Diagnose)")
+    print("  netout zaehlt bei Abgaengen NUR Stornos - Ausfuehrungen sind herausklassifiziert.")
+    print("  Ueber ein Fenster gilt: Tiefenaenderung = stack - pull - fills. Bleibt die Tiefe")
+    print("  konstant, folgt netout ~ -Handelsvolumen. Dann misst netout im Kern nur Volumen.")
+    diag = vola.netout_diagnosis(samples)
+    print(_fmt(diag))
+    worst = diag["corr_netout_volumen"].min()
+    if worst < -0.5:
+        print(f"  -> Korrelation bis {worst:.2f}: netout ist weitgehend ein Volumen-Abbild,")
+        print("     kein eigenstaendiges Orderbuch-Signal.")
+
     # ---------------- Varianten ----------------
     print("\n" + "=" * 104)
     print("GETESTETE VARIANTEN")
@@ -154,6 +165,7 @@ def main():
     lad.to_csv(OUT / "vola_ladder.csv", index=False)
     ter.to_csv(OUT / "vola_terciles_pooled.csv", index=False)
     ter_day.to_csv(OUT / "vola_terciles_per_day.csv", index=False)
+    diag.to_csv(OUT / "vola_netout_diagnosis.csv", index=False)
     print(f"\n  CSV-Ergebnisse gespeichert in: {OUT}")
 
 
