@@ -184,14 +184,18 @@ def _client_kwargs() -> dict:
     return {"api_key": key} if key else {}
 
 
-def download_orderbook() -> pd.DataFrame:
-    raw = chd.get_orderbook(C.SYMBOL, C.EXCHANGE, C.START_DATE, f"{C.END_DATE} 23:59:59",
+def download_orderbook(start_date: str = None, end_date: str = None) -> pd.DataFrame:
+    start_date = start_date or C.START_DATE
+    end_date = end_date or C.END_DATE
+    raw = chd.get_orderbook(C.SYMBOL, C.EXCHANGE, start_date, f"{end_date} 23:59:59",
                             **_client_kwargs())
     return normalize_orderbook(raw)
 
 
-def download_trades() -> pd.DataFrame:
-    raw = chd.get_trades(C.SYMBOL, C.EXCHANGE, C.START_DATE, f"{C.END_DATE} 23:59:59",
+def download_trades(start_date: str = None, end_date: str = None) -> pd.DataFrame:
+    start_date = start_date or C.START_DATE
+    end_date = end_date or C.END_DATE
+    raw = chd.get_trades(C.SYMBOL, C.EXCHANGE, start_date, f"{end_date} 23:59:59",
                          **_client_kwargs())
     return normalize_trades(raw)
 

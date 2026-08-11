@@ -120,6 +120,93 @@ def reconstruct_top_of_book(ob: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+def top_of_book_by_second(ob: pd.DataFrame, date: str) -> pd.DataFrame:
+    """
+    Wie reconstruct_top_of_book, aber als DICHTE Sekunden-Tabelle (0..86399)
+    inkl. Tiefe am Best-Level. Sekunden ohne Update erben den letzten Stand
+    (ffill). Rueckgabe indexiert nach Sekunde-des-Tages:
+      [mid, spread, bid_qty, ask_qty]
+    """
+    day0_ns = pd.Timestamp(f"{date} 00:00:00", tz="UTC").value
+    n_sec = 24 * 3600
+    mid_a = np.full(n_sec, np.nan)
+    spr_a = np.full(n_sec, np.nan)
+    bq_a = np.full(n_sec, np.nan)
+    aq_a = np.full(n_sec, np.nan)
+    if ob.empty:
+        return pd.DataFrame({"mid": mid_a, "spread": spr_a, "bid_qty": bq_a, "ask_qty": aq_a})
+
+    et = to_ns(ob["event_time"])
+    sec_of = ((et - day0_ns) // 1_000_000_000).astype("int64")
+    ev = ob["event_type"].to_numpy(dtype=object)
+    sd = ob["side"].to_numpy(dtype=object)
+    px = ob["price"].to_numpy(dtype="float64")
+    qt = ob["quantity"].to_numpy(dtype="float64")
+
+    bids: dict[float, float] = {}
+    asks: dict[float, float] = {}
+    bid_heap: list[float] = []
+    ask_heap: list[float] = []
+
+    def best_bid() -> float:
+        while bid_heap:
+            p = -bid_heap[0]
+            if bids.get(p, 0.0) > 0.0:
+                return p
+            heapq.heappop(bid_heap)
+        return np.nan
+
+    def best_ask() -> float:
+        while ask_heap:
+            p = ask_heap[0]
+            if asks.get(p, 0.0) > 0.0:
+                return p
+            heapq.heappop(ask_heap)
+        return np.nan
+
+    def record(s: int):
+        if 0 <= s < n_sec:
+            bb, ba = best_bid(), best_ask()
+            if not (np.isnan(bb) or np.isnan(ba)) and ba > bb:
+                mid_a[s] = (bb + ba) / 2.0
+                spr_a[s] = ba - bb
+                bq_a[s] = bids.get(bb, 0.0)
+                aq_a[s] = asks.get(ba, 0.0)
+
+    cur_sec = None
+    last_snap = None
+    for i in range(len(et)):
+        s = int(sec_of[i])
+        if cur_sec is None:
+            cur_sec = s
+        elif s != cur_sec:
+            record(cur_sec); cur_sec = s
+        if ev[i] == "snapshot" and et[i] != last_snap:
+            bids.clear(); asks.clear(); bid_heap.clear(); ask_heap.clear()
+            last_snap = et[i]
+        p, q = px[i], qt[i]
+        if sd[i] == "bid":
+            if q > 0.0:
+                if bids.get(p, 0.0) == 0.0:
+                    heapq.heappush(bid_heap, -p)
+                bids[p] = q
+            else:
+                bids.pop(p, None)
+        elif sd[i] == "ask":
+            if q > 0.0:
+                if asks.get(p, 0.0) == 0.0:
+                    heapq.heappush(ask_heap, p)
+                asks[p] = q
+            else:
+                asks.pop(p, None)
+    if cur_sec is not None:
+        record(cur_sec)
+
+    df = pd.DataFrame({"mid": mid_a, "spread": spr_a, "bid_qty": bq_a, "ask_qty": aq_a})
+    return df.ffill()
+
+
+# ---------------------------------------------------------------------------
 def level_deltas(ob: pd.DataFrame) -> pd.DataFrame:
     """
     Fuegt je Zeile die Mengenaenderung gegenueber dem vorigen Stand DESSELBEN

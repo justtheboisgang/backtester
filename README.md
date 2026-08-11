@@ -171,6 +171,77 @@ Zwischenstände       ->  data/  (raw/ interim/ output/, per .gitignore lokal)
 
 ---
 
+---
+
+# Zweite Studie: DOM-Zustand → Vorwärtsbewegung
+
+**Forschungsfrage:** Zeigt der DOM-Zustand (Pull/Stack je Seite, Imbalance,
+Spread, Tiefe) **vor** einer Bewegung ein wiederkehrendes Muster — (a) dass
+gleich eine **größere** Bewegung kommt, und (b) in welche **Richtung**?
+Horizonte **30 / 60 / 120 s**.
+
+```bash
+python run_dom_study.py --days 5                    # echte Daten, Tag für Tag
+python run_dom_study.py --days 5 --start 2026-07-15
+python run_dom_study.py --days 3 --synth            # offline testen
+python run_dom_study.py --analyze-only              # nur Analyse aus Cache
+```
+
+## Vorzeichen-Konvention (wichtig)
+
+```
+imbalance = ((stack_bid + pull_ask) − (stack_ask + pull_bid)) / Summe aller vier
+```
+
+| Vorzeichen | Bedeutung |
+|---|---|
+| **positiv** | **Aufwärtsdruck**: Bids werden **aufgebaut** und/oder Asks **abgezogen** |
+| **negativ** | **Abwärtsdruck**: Asks werden **aufgebaut** und/oder Bids **abgezogen** |
+
+Weiter: `trade_imb = (buy_vol − sell_vol)/(buy_vol + sell_vol)`, positiv =
+Käufer aggressiv. `move_bps = (mid[t0+h]/mid[t0] − 1)·10000`, positiv = gestiegen.
+
+## Speicher: Tag für Tag
+
+Ein Tag Orderbuch ≈ 3,4 GB. Der Runner lädt **einen** Tag, verdichtet ihn zur
+kleinen Sekunden-Tabelle (~25 MB), speichert die als Parquet und **verwirft die
+Rohdaten sofort** (`del` + `gc.collect()`). Es liegt **nie** mehr als ein Tag
+Rohdaten im Speicher. Die Analysen laufen nur auf den kleinen Tabellen.
+
+## Aufbau
+
+- **Stichprobe:** *alle* Zeitpunkte im **Sekundenraster** (nicht nur an Levels).
+  Flags `near_level` (nahe VAH/VAL der Vorsession) und `active` (Handel in den
+  letzten 30 s) markieren Teilmengen zum Vergleich.
+- **Vorher-Merkmale** (Fenster 5/15/30 s, **ausschließlich vor t0**):
+  `stack_bid`, `stack_ask`, `pull_bid`, `pull_ask` (je Seite getrennt),
+  `imbalance`, `spread`, `depth` (Tiefe der besten Level), `vol`, `trade_imb`.
+- **Zielgrößen:** (a) Richtung des Moves, (b) binär: `|move|` über
+  **12 bps (Taker)** bzw. **6 bps (Maker)**.
+- **Auswertung A (Größe):** unterscheiden sich die Vorher-Merkmale zwischen
+  großem und kleinem Folge-Move?
+- **Auswertung B (Richtung):** *nur unter den großen Moves* — sagt die
+  Vorher-Imbalance das Vorzeichen vorher? Trefferquote **immer neben `base_rate`**
+  (= wie gut schon „immer dieselbe Richtung" wäre); ohne diesen Vergleich ist
+  eine Trefferquote nicht interpretierbar.
+- **Kontrollgruppe:** zufällige Zeitpunkte aus aktiven Phasen, gleiche Messung.
+- **Kein Look-ahead:** Fenstersummen laufen über `[t0−w, t0−1]`, also strikt vor
+  `t0`; Moves ausschließlich danach.
+- **Fallzahlen** je Zelle, `belastbar=False` unter 30. Die **Anzahl aller
+  getesteten Varianten** wird am Ende ausgewiesen (~198 Einzelvergleiche
+  gepoolt) — einzelne „Treffer" ohne Wiederholung an neuen Tagen sind damit
+  nicht belastbar.
+
+## Ergebnisse
+
+Pro Tag **und** gepoolt (damit sichtbar wird, ob ein Effekt über Tage stabil ist
+oder nur an einem Tag auftrat). CSVs in `data/output/`:
+`dom_move_distribution_{per_day,pooled,subsets}.csv`,
+`dom_size_analysis_pooled.csv`,
+`dom_direction_analysis_{pooled,per_day,control}.csv`.
+
+---
+
 ## Nächste Schritte (erst nach Sichtung eines echten Tages)
 
 - **Ein echter Tag zuerst.** `python run_all.py` mit deinem Key laufen lassen,

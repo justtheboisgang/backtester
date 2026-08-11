@@ -86,6 +86,23 @@ ROUND_TRIP_FEE_BPS = 2 * TAKER_FEE_BPS   # rein + raus
 # Der durchschnittliche Spread wird aus den Daten geschaetzt (nicht angenommen).
 
 # ---------------------------------------------------------------------------
+# 6b) DOM-Studie (zweite Auswertung): DOM-Zustand -> Vorwaertsbewegung
+# ---------------------------------------------------------------------------
+# Zeithorizonte der Vorwaertsbewegung (Sekunden).
+HORIZONS_S = [30, 60, 120]
+# Kostenschwellen fuer "grosser Move" (Anforderung):
+#   Taker = 10 bps Gebuehr + Spread  ~ 12 bps
+#   Maker =  4 bps Gebuehr + halber Spread ~ 6 bps
+THRESH_TAKER_BPS = 12.0
+THRESH_MAKER_BPS = 6.0
+# Band um den Mid (USDT), in dem Orderbuch-Aktivitaet dem "Buch" zugerechnet wird.
+DOM_BOOK_BAND = 0.05
+# Naehe zu VAH/VAL der Vor-Session fuer die Teilmengen-Markierung.
+DOM_NEAR_LEVEL_BAND = 0.05
+# Standard-Anzahl Tage fuer die Studie (Tag fuer Tag verarbeitet).
+STUDY_DAYS = 5
+
+# ---------------------------------------------------------------------------
 # 7) Pfade  (data/ ist in .gitignore -> bleibt lokal)
 # ---------------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent.parent
